@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.pyc
+
+# AI Models (GitHub 용량 초과 방지)
+*.pkl
+
+# OS files
+.DS_Store
+Thumbs.db
