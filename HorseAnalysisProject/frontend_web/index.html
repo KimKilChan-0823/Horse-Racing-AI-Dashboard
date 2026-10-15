@@ -29,7 +29,7 @@
             padding: 20px;
         }
 
-        /* 🌟 모바일 카드 레이아웃 스타일 */
+        /* 모바일 카드 레이아웃 스타일 */
         .mobile-card-view { display: none; }
         
         @media (max-width: 768px) {
@@ -46,7 +46,7 @@
             <span class="visually-hidden">Loading...</span>
         </div>
         <h5 class="fw-bold text-dark mb-1">데이터 분석 및 AI 예측 중...</h5>
-        <p class="text-muted small mb-0">무료 서버 초기 접속 시 30초~1분 정도 소요될 수 있습니다.</p>
+        <p class="text-muted small mb-0">잠시만 기다려 주세요.</p>
     </div>
 
     <div class="container my-4">
@@ -74,7 +74,7 @@
                     <input type="date" id="meetDate" class="form-control form-control-sm" onchange="handleDateChange()">
                 </div>
                 <div class="col-6 col-md-2">
-                    <label class="form-label fw-bold text-info small"><i class="fa-solid fa-cloud-sun"></i> 예상 날씨</label>
+                    <label class="form-label fw-bold text-info small"><i class="fa-solid fa-cloud-sun"></i> 날씨 조건</label>
                     <select id="weather" class="form-select form-select-sm border-info" onchange="fetchAnalysisData()">
                         <option value="맑음">☀️ 맑음</option>
                         <option value="흐림">☁️ 흐림</option>
@@ -138,7 +138,7 @@
             </div>
         </div>
 
-        <!-- 데이터 그리드 (PC: 테이블 / 모바일: 카드) -->
+        <!-- 데이터 그리드 -->
         <div class="card shadow-sm border-0">
             <div class="card-body p-2 p-md-3">
                 <!-- PC 테이블 뷰 -->
@@ -189,9 +189,7 @@
             document.getElementById('meetDate').value = '2026-10-11';
             renderRaceButtons();
             
-            // 🌟 날씨 조회는 백그라운드에서 비동기로 처리하여 초기 로딩 속도 향상
-            autoSetWeather().catch(e => console.log(e));
-            
+            // 🌟 외부 날씨 API 호출을 완전히 제거하여 로딩 속도 극대화
             await fetchAnalysisData();
         };
 
@@ -214,7 +212,6 @@
         async function resetToOneR() {
             currentRaceNo = 1;
             renderRaceButtons();
-            await autoSetWeather(); 
             fetchAnalysisData();
         }
 
@@ -255,7 +252,7 @@
                 renderBettingRecommendation();
             } catch (error) {
                 console.error('API 호출 오류:', error);
-                alert('서버 연결 실패 (Render 서버가 깨어나는 중일 수 있습니다. 잠시 후 다시 시도해 주세요)');
+                alert('서버 연결 실패');
             } finally {
                 showLoading(false);
             }
@@ -489,47 +486,6 @@
                     }
                 }
             });
-        }
-
-        async function autoSetWeather() {
-            const loc = document.getElementById('meetLoc').value;
-            const date = document.getElementById('meetDate').value;
-            const coords = {
-                '전체': { lat: 37.429, lon: 127.016 },
-                '서울': { lat: 37.429, lon: 127.016 },
-                '부산경남': { lat: 35.153, lon: 128.877 },
-                '제주': { lat: 33.415, lon: 126.402 },
-                '영천': { lat: 35.973, lon: 128.938 }
-            };
-            const targetCoord = coords[loc] || coords['전체'];
-            
-            try {
-                const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${targetCoord.lat}&longitude=${targetCoord.lon}&daily=weather_code,precipitation_sum&timezone=Asia%2FSeoul&start_date=${date}&end_date=${date}`);
-                const data = await res.json();
-                
-                if (data && data.daily && data.daily.weather_code) {
-                    const code = data.daily.weather_code[0];
-                    const rainMM = data.daily.precipitation_sum[0] || 0; 
-                    
-                    let weatherStr = '맑음';
-                    if (code <= 3) weatherStr = '맑음';
-                    else if (code === 45 || code === 48) weatherStr = '흐림';
-                    else if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82) || code >= 95) weatherStr = '비';
-                    else if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) weatherStr = '눈';
-
-                    document.getElementById('weather').value = weatherStr;
-                    
-                    let trackStr = '건조';
-                    if (rainMM === 0) trackStr = '건조'; 
-                    else if (rainMM <= 5) trackStr = '다습'; 
-                    else if (rainMM <= 15) trackStr = '포화'; 
-                    else trackStr = '불량'; 
-                    
-                    document.getElementById('trackCond').value = trackStr;
-                }
-            } catch (e) {
-                console.error('날씨 연동 실패:', e);
-            }
         }
 
         function renderBettingRecommendation() {
