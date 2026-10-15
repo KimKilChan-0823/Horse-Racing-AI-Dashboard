@@ -161,6 +161,12 @@
 
     <!-- 자바스크립트 로직 -->
     <script>
+        // 🌟 [핵심] 로컬/배포 환경 자동 분기
+        // 파일 직접 열기(file:) 또는 127.0.0.1:5500(Live Server) 등 로컬 환경일 때만 로컬 백엔드(8000)를 바라봄
+        // Render 도메인(onrender.com)에서는 빈 문자열('')로 동작하여 자기 도메인의 API를 호출함
+        const isLocalHost = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '10000';
+        const API_BASE_URL = (window.location.protocol === 'file:' || isLocalHost) ? 'http://127.0.0.1:8000' : '';
+
         let allData = []; 
         let currentOdds = {}; 
         let currentRaceNo = 1; 
@@ -169,7 +175,6 @@
         let radarChartInstance = null; 
 
         window.onload = async function() {
-            // 테스트 데이터가 있는 2026-10-11로 기본 세팅 (필요시 오늘 날짜로 변경 가능)
             document.getElementById('meetDate').value = '2026-10-11';
             
             renderRaceButtons();
@@ -200,20 +205,33 @@
             fetchAnalysisData();
         }
 
+        function showLoading(isLoading) {
+            const overlay = document.getElementById('loadingOverlay');
+            if (overlay) {
+                overlay.style.display = isLoading ? 'flex' : 'none';
+            }
+        }
+
         async function fetchAnalysisData() {
+            showLoading(true);
+
             const loc = document.getElementById('meetLoc').value;
             const date = document.getElementById('meetDate').value;
             const weather = document.getElementById('weather').value;
             const trackCond = document.getElementById('trackCond').value;
             
-            const analysisUrl = `http://127.0.0.1:8000/api/analysis?meet_date=${date}&meet_loc=${encodeURIComponent(loc)}&race_no=${currentRaceNo}&weather=${encodeURIComponent(weather)}&track_cond=${encodeURIComponent(trackCond)}`;
-            const oddsUrl = `http://127.0.0.1:8000/api/odds?meet_loc=${encodeURIComponent(loc)}&race_no=${currentRaceNo}`;
+            const analysisUrl = `${API_BASE_URL}/api/analysis?meet_date=${date}&meet_loc=${encodeURIComponent(loc)}&race_no=${currentRaceNo}&weather=${encodeURIComponent(weather)}&track_cond=${encodeURIComponent(trackCond)}`;
+            const oddsUrl = `${API_BASE_URL}/api/odds?meet_loc=${encodeURIComponent(loc)}&race_no=${currentRaceNo}`;
 
             try {
                 const [analysisRes, oddsRes] = await Promise.all([
                     fetch(analysisUrl),
                     fetch(oddsUrl).catch(() => ({ json: () => ({ odds: {} }) }))
                 ]);
+
+                if (!analysisRes.ok) {
+                    throw new Error(`HTTP 상태 코드: ${analysisRes.status}`);
+                }
 
                 const analysisJson = await analysisRes.json();
                 const oddsJson = await oddsRes.json();
@@ -226,7 +244,9 @@
                 renderBettingRecommendation();
             } catch (error) {
                 console.error('API 호출 오류:', error);
-                alert('서버 연결 실패: ' + error);
+                alert('서버 연결 실패: ' + error.message);
+            } finally {
+                showLoading(false);
             }
         }
 
@@ -282,7 +302,6 @@
                     else actualRankHtml = `<span class="badge bg-light text-dark border">${rank}착</span>`;
                 }
 
-                // 가치 베팅(EV) 자동 계산
                 const horseNoStr = String(item.horse_no);
                 const odds = currentOdds[horseNoStr] || 0;
                 
@@ -305,7 +324,6 @@
                     }
                 }
 
-                // 🌟 경마장별 뱃지 컬러 지정
                 const locName = item.meet_loc || '부산경남';
                 let locBadgeClass = 'bg-primary text-white';
                 if (locName.includes('부산') || locName.includes('부경')) {
@@ -314,7 +332,6 @@
                     locBadgeClass = 'bg-warning text-dark';
                 }
 
-                // 🌟 [개선] 경마장 구분 태그 + 원형 등번호 마번 UI (단일 경마장 선택 시에도 유지)
                 const horseNoDisplay = `
                     <div class="d-inline-flex align-items-center justify-content-center gap-1">
                         <span class="badge ${locBadgeClass} shadow-sm" style="font-size: 0.72rem; padding: 4px 6px;">${locName}</span>
@@ -387,13 +404,16 @@
         }
 
         function drawRadarChart() {
+            const chartBox = document.getElementById('chartContainer');
             const selectedLoc = document.getElementById('meetLoc').value;
+
+            // '전체' 선택 시 또는 데이터가 3마리 미만일 때 숨김
             if (selectedLoc === '전체' || !allData || allData.length < 3) {
-                document.getElementById('chartContainer').style.display = 'none';
+                chartBox.style.display = 'none';
                 return;
             }
             
-            document.getElementById('chartContainer').style.display = 'block';
+            chartBox.style.display = 'block';
             
             const top3 = [...allData].sort((a, b) => b.pred_score_lgbm - a.pred_score_lgbm).slice(0, 3);
             const ctx = document.getElementById('radarChart').getContext('2d');
@@ -490,6 +510,8 @@
         function renderBettingRecommendation() {
             const container = document.getElementById('bettingContainer');
             const selectedLoc = document.getElementById('meetLoc').value;
+
+            // '전체' 선택 시 또는 데이터가 3마리 미만일 때 숨김
             if (selectedLoc === '전체' || !allData || allData.length < 3) {
                 container.style.display = 'none';
                 return;
@@ -505,48 +527,6 @@
             document.getElementById('betTrio').innerHTML = `${h1.horse_no}번 - ${h2.horse_no}번 - ${h3.horse_no}번`;
 
             container.style.display = 'block';
-        }
-
-        // 로딩 표시 제어 함수
-        function showLoading(isLoading) {
-            const overlay = document.getElementById('loadingOverlay');
-            if (overlay) {
-                overlay.style.display = isLoading ? 'flex' : 'none';
-            }
-        }
-
-        async function fetchAnalysisData() {
-            showLoading(true); // 🌟 로딩 시작
-
-            const loc = document.getElementById('meetLoc').value;
-            const date = document.getElementById('meetDate').value;
-            const weather = document.getElementById('weather').value;
-            const trackCond = document.getElementById('trackCond').value;
-            
-            const analysisUrl = `http://127.0.0.1:8000/api/analysis?meet_date=${date}&meet_loc=${encodeURIComponent(loc)}&race_no=${currentRaceNo}&weather=${encodeURIComponent(weather)}&track_cond=${encodeURIComponent(trackCond)}`;
-            const oddsUrl = `http://127.0.0.1:8000/api/odds?meet_loc=${encodeURIComponent(loc)}&race_no=${currentRaceNo}`;
-
-            try {
-                const [analysisRes, oddsRes] = await Promise.all([
-                    fetch(analysisUrl),
-                    fetch(oddsUrl).catch(() => ({ json: () => ({ odds: {} }) }))
-                ]);
-
-                const analysisJson = await analysisRes.json();
-                const oddsJson = await oddsRes.json();
-
-                allData = analysisJson.data || []; 
-                currentOdds = oddsJson.odds || {}; 
-
-                applySortAndRender(); 
-                drawRadarChart(); 
-                renderBettingRecommendation();
-            } catch (error) {
-                console.error('API 호출 오류:', error);
-                alert('서버 연결 실패: ' + error);
-            } finally {
-                showLoading(false); // 🌟 요청 성공/실패 여부와 관계없이 로딩 종료
-            }
         }
 
         async function handleDateChange() {
