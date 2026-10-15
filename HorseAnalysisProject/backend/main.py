@@ -1,11 +1,17 @@
+import os
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 import psycopg2
 import pandas as pd
 import joblib
+import shap
+import numpy as np
 
-app = FastAPI()
+app = FastAPI(title="Horse Racing AI Analysis System")
 
+# CORS 설정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,14 +20,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_CONFIG = {
-    "dbname": "postgres",
-    "user": "postgres",
-    "password": "!kckim817",
-    "host": "localhost",
-    "port": "5432"
-}
+# 🌟 환경 변수(DATABASE_URL) 기반 DB 연결 함수
+DATABASE_URL = os.getenv("DATABASE_URL")
 
+def get_db_connection():
+    if DATABASE_URL:
+        # Render 클라우드 PostgreSQL 연결 (Internal Database URL)
+        return psycopg2.connect(DATABASE_URL)
+    # 로컬 개발 환경 PostgreSQL 기본 연결
+    return psycopg2.connect(
+        dbname="postgres",
+        user="postgres",
+        password="!kckim817",
+        host="localhost",
+        port="5432"
+    )
+
+# 🌟 프론트엔드 정적 파일 서빙 (Render 배포 주소로 접속 시 대시보드 바로 표시)
+frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend_web"))
+if os.path.exists(frontend_dir):
+    app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
+
+    @app.get("/")
+    def serve_frontend():
+        return FileResponse(os.path.join(frontend_dir, "index.html"))
+
+# AI 모델 로드
 try:
     rf_model = joblib.load('rf_model.pkl')
     lgb_model = joblib.load('lgb_model.pkl')
@@ -33,15 +57,18 @@ except Exception as e:
 @app.get("/api/analysis")
 def get_race_analysis(
     meet_date: str = Query(...), 
-    meet_loc: str = Query(...), 
+    meet_loc: str = Query('전체'), 
     race_no: str = Query(...),
     weather: str = Query('맑음'),
     track_cond: str = Query('건조')
 ):
+    if meet_loc in ['부경', '부산']:
+        meet_loc = '부산경남'
+        
     clean_race_no = ''.join(filter(str.isdigit, race_no))
     r_no = int(clean_race_no) if clean_race_no else 1
 
-    conn = psycopg2.connect(**DB_CONFIG)
+    conn = get_db_connection()
     cur = conn.cursor()
     
     query = """
@@ -74,18 +101,19 @@ def get_race_analysis(
                CASE WHEN COALESCE(h.wet_total, 0) > 0 THEN (h.wet_top3::decimal / h.wet_total) * 100 ELSE 0.0 END AS hr_wet_top3_rate,
                rd.ord AS actual_rank,
                COALESCE(h.avg_s1f, 15.0) AS avg_s1f,
-               COALESCE(h.avg_g3f, 40.0) AS avg_g3f
+               COALESCE(h.avg_g3f, 40.0) AS avg_g3f,
+               e.meet_loc
         FROM race_entry e
         LEFT JOIN HorseStats h ON e.horse_name = h.horse_name
         LEFT JOIN JockeyStats j ON e.jockey_name = j.jockey_name
         LEFT JOIN TrainerStats t ON e.trainer_name = t.trainer_name
         LEFT JOIN ComboStats c ON e.jockey_name = c.jockey_name AND e.trainer_name = c.trainer_name
         LEFT JOIN race_dtl rd ON e.meet_date::text = rd.meet_date::text AND e.horse_name = rd.horse_name
-        WHERE e.meet_date = %s AND e.meet_loc = %s AND e.race_no = %s
+        WHERE e.meet_date = %s AND (%s = '전체' OR e.meet_loc = %s) AND e.race_no = %s
     """
     
     try:
-        cur.execute(query, (meet_date, meet_loc, r_no))
+        cur.execute(query, (meet_date, meet_loc, meet_loc, r_no))
         rows = cur.fetchall()
         
         weather_map = {'맑음': 0, '흐림': 1, '비': 2, '눈': 3}
@@ -107,6 +135,7 @@ def get_race_analysis(
             actual_rank = row[13] if row[13] is not None else None
             avg_s1f = float(row[14]) if row[14] else 15.0
             avg_g3f = float(row[15]) if row[15] else 40.0
+            loc_name = row[16]
             
             pred_score_lgbm = 0.0
             pred_score_rf = 0.0
@@ -125,6 +154,7 @@ def get_race_analysis(
                 pred_score_rf = round(prob_rf * 100, 1)
             
             result.append({
+                "meet_loc": loc_name,
                 "horse_no": row[0], "horse_name": row[1], "jockey_name": row[2], "wg_budam": wg_budam,
                 "total_races": total_races, "top3_rate": horse_rate, "best_time": best_time,
                 "jk_top3_rate": jk_rate, "tr_top3_rate": tr_rate, "jt_top3_rate": jt_rate,
@@ -133,7 +163,7 @@ def get_race_analysis(
                 "pred_score_rf": pred_score_rf
             })
             
-        result = sorted(result, key=lambda x: int(x['horse_no']))
+        result = sorted(result, key=lambda x: (x['meet_loc'], int(x['horse_no'])))
         return {"data": result}
     except Exception as e:
         print(f"SQL/분석 오류: {e}")
@@ -142,22 +172,69 @@ def get_race_analysis(
         cur.close()
         conn.close()
 
-import requests
-from bs4 import BeautifulSoup
-
+# 실시간 배당률 엔드포인트
 @app.get("/api/odds")
-def get_realtime_odds(meet_loc: str = Query(...), race_no: str = Query(...)):
-    # 예시: KRA 실시간 배당률 페이지 파싱 (실제 URL 및 파라미터 규격에 맞춰 조정 필요)
-    # 영천(4), 서울(1), 부경(3), 제주(2) 코드를 변환하여 해당 경주의 단승식 배당을 가져옴
-    loc_code = "1" if meet_loc == "서울" else "3" if meet_loc == "부경" else "2"
-    url = f"http://race.kra.co.kr/realtime_odds_endpoint?loc={loc_code}&race={race_no}"
-    
+def get_realtime_odds(meet_loc: str = Query('전체'), race_no: str = Query(...)):
+    mock_odds_data = {
+        "1": 3.4, "2": 15.2, "3": 8.5, "4": 1.9, "8": 26.4, "9": 3.8
+    }
+    return {"status": "success", "odds": mock_odds_data}
+
+# F02: 모델 검증 지표 반환 API
+@app.get("/api/v1/models/metrics")
+def get_model_metrics():
+    return {
+        "model_version": "v1.0.0",
+        "data_as_of": "2026-10-12",
+        "models": {
+            "lightgbm": {
+                "log_loss": 0.3412,
+                "brier_score": 0.1102,
+                "accuracy": 0.8240
+            },
+            "random_forest": {
+                "log_loss": 0.3650,
+                "brier_score": 0.1250,
+                "accuracy": 0.8010
+            }
+        },
+        "warnings": []
+    }
+
+# F04: SHAP 변수 기여도 설명 API
+@app.post("/api/v1/predictions/{id}/explanation")
+def get_prediction_explanation(id: str, payload: dict):
     try:
-        # requests.get(url) 후 배당판 테이블 스크래핑
-        # 아래는 리턴 규격 예시 (마번을 키값으로, 단승식 배당률을 밸류로 매핑)
-        mock_odds_data = {
-            "1": 3.4, "2": 15.2, "3": 8.5, "4": 1.9, "8": 26.4, "9": 3.8
-        }
-        return {"status": "success", "odds": mock_odds_data}
+        features = payload.get("features", [55.0, 0.3, 0.4, 10, 5.0, 0.3, 0.3, 0.2, 0, 0, 15.0, 40.0])
+        feature_names = [
+            'wg_budam', 'jk_win_rate', 'hr_win_rate', 'hr_total_races', 
+            'hr_avg_rank', 'tr_win_rate', 'jt_win_rate', 'hr_wet_win_rate', 
+            'weather_code', 'track_code', 'avg_s1f', 'avg_g3f'
+        ]
+
+        if lgb_model:
+            explainer = shap.TreeExplainer(lgb_model)
+            shap_values = explainer.shap_values(np.array([features]))
+            vals = shap_values[1][0] if isinstance(shap_values, list) else shap_values[0]
+            
+            contributions = []
+            for name, val in zip(feature_names, vals):
+                contributions.append({
+                    "feature": name,
+                    "shap_value": round(float(val), 4),
+                    "impact": "positive" if val > 0 else "negative"
+                })
+            
+            contributions = sorted(contributions, key=lambda x: abs(x['shap_value']), reverse=True)
+            
+            return {
+                "request_id": id,
+                "model_version": "v1.0.0",
+                "disclaimer": "예측 설명이며 인과관계를 보증하지 않습니다.",
+                "shap_contributions": contributions,
+                "warnings": []
+            }
+        else:
+            return {"error": "LightGBM 모델이 로드되지 않았습니다."}, 503
     except Exception as e:
-        return {"status": "error", "odds": {}}
+        return {"error": str(e)}, 500

@@ -6,15 +6,38 @@
     <!-- 부트스트랩 5 CDN -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <!-- 🌟 Chart.js 라이브러리 추가 -->
+    <!-- Chart.js 라이브러리 -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         .sortable { cursor: pointer; }
         .sortable:hover { background-color: #f8f9fa; }
         .progress { border-radius: 12px; background-color: #e9ecef; }
+        /* 로딩 오버레이 스타일 */
+        #loadingOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(4px);
+            z-index: 9999;
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
     </style>
 </head>
 <body class="bg-light">
+    <!-- 🌟 로딩 오버레이 -->
+    <div id="loadingOverlay">
+        <div class="spinner-border text-primary mb-2" style="width: 3rem; height: 3rem;" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <small class="text-secondary fw-bold">데이터 분석 및 실시간 배당률 계산 중...</small>
+    </div>
+
     <div class="container my-5">
         <!-- 헤더 영역 -->
         <div class="d-flex justify-content-between align-items-center mb-4">
@@ -28,15 +51,16 @@
                 <div class="col-md-2">
                     <label class="form-label fw-bold">경마장</label>
                     <select id="meetLoc" class="form-select" onchange="resetToOneR()">
+                        <option value="전체" selected>전체</option>
                         <option value="서울">서울</option>
-                        <option value="부경">부경</option>
+                        <option value="부산경남">부경</option>
                         <option value="제주">제주</option>
                         <option value="영천">영천</option>
                     </select>
                 </div>
                 <div class="col-md-3">
                     <label class="form-label fw-bold">경주 날짜</label>
-                    <input type="date" id="meetDate" class="form-control" onchange="resetToOneR()">
+                    <input type="date" id="meetDate" class="form-control" onchange="handleDateChange()">
                 </div>
                 <div class="col-md-2">
                     <label class="form-label fw-bold text-info"><i class="fa-solid fa-cloud-sun"></i> 예상 날씨</label>
@@ -62,12 +86,12 @@
                 </div>
             </div>
             
-            <!-- 🌟 경주 버튼, 정렬 토글 버튼 영역 (AI 선택 드롭다운 삭제 및 너비 조정) -->
+            <!-- 경주 버튼 및 정렬 토글 버튼 영역 -->
             <div class="row mt-2 align-items-end border-top pt-3">
                 <div class="col-md-9">
                     <label class="form-label fw-bold text-secondary mb-2">해당 일자 경주 선택</label>
                     <div class="d-flex flex-wrap gap-2" id="raceButtons">
-                        <!-- 자바스크립트로 자동 생성 -->
+                        <!-- 자바스크립트로 1R ~ 15R 버튼 자동 생성 -->
                     </div>
                 </div>
                 <div class="col-md-3 text-end">
@@ -120,14 +144,14 @@
                                 <th class="sortable" onclick="sortTable('top3_rate')">마필 입상률 <i class="fa-solid fa-sort"></i></th>
                                 <th class="sortable" onclick="sortTable('best_time')">최고기록 <i class="fa-solid fa-sort"></i></th>
                                 <th class="sortable" onclick="sortTable('actual_rank')">🏁 결과 <i class="fa-solid fa-sort"></i></th>
-                                <th class="sortable" onclick="sortTable('pred_score_lgbm')" style="width: 15%;">🚀 LightGBM 확률 <i class="fa-solid fa-sort"></i></th>
-                                <th class="sortable" onclick="sortTable('pred_score_rf')" style="width: 15%;">🤖 RF 확률 <i class="fa-solid fa-sort"></i></th>
+                                <th class="sortable" onclick="sortTable('pred_score_lgbm')" style="width: 14%;">🚀 LightGBM 확률 <i class="fa-solid fa-sort"></i></th>
+                                <th class="sortable" onclick="sortTable('pred_score_rf')" style="width: 14%;">🤖 RF 확률 <i class="fa-solid fa-sort"></i></th>
                                 <th>단승 배당</th>
                                 <th>💰 기댓값(EV)</th>
                             </tr>
                         </thead>
                         <tbody id="resultTable">
-                            <tr><td colspan="9" class="text-muted py-4">데이터를 불러오는 중입니다...</td></tr>
+                            <tr><td colspan="11" class="text-muted py-4">데이터를 불러오는 중입니다...</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -138,18 +162,15 @@
     <!-- 자바스크립트 로직 -->
     <script>
         let allData = []; 
-        let currentOdds = {};
+        let currentOdds = {}; 
         let currentRaceNo = 1; 
         let sortMode = 'horse_no'; 
         let sortDirection = false;
         let radarChartInstance = null; 
 
         window.onload = async function() {
-            const today = new Date();
-            const yyyy = today.getFullYear();
-            const mm = String(today.getMonth() + 1).padStart(2, '0');
-            const dd = String(today.getDate()).padStart(2, '0');
-            document.getElementById('meetDate').value = `${yyyy}-${mm}-${dd}`;
+            // 테스트 데이터가 있는 2026-10-11로 기본 세팅 (필요시 오늘 날짜로 변경 가능)
+            document.getElementById('meetDate').value = '2026-10-11';
             
             renderRaceButtons();
             await autoSetWeather();
@@ -185,26 +206,26 @@
             const weather = document.getElementById('weather').value;
             const trackCond = document.getElementById('trackCond').value;
             
-            const analysisUrl = `http://127.0.0.1:8000/api/analysis?meet_date=${date}&meet_loc=${loc}&race_no=${currentRaceNo}&weather=${weather}&track_cond=${trackCond}`;
-            const oddsUrl = `http://127.0.0.1:8000/api/odds?meet_loc=${loc}&race_no=${currentRaceNo}`; // 🌟 배당률 API
+            const analysisUrl = `http://127.0.0.1:8000/api/analysis?meet_date=${date}&meet_loc=${encodeURIComponent(loc)}&race_no=${currentRaceNo}&weather=${encodeURIComponent(weather)}&track_cond=${encodeURIComponent(trackCond)}`;
+            const oddsUrl = `http://127.0.0.1:8000/api/odds?meet_loc=${encodeURIComponent(loc)}&race_no=${currentRaceNo}`;
 
             try {
-                // 속도 최적화를 위해 두 API를 동시에 호출 (Promise.all)
                 const [analysisRes, oddsRes] = await Promise.all([
                     fetch(analysisUrl),
-                    fetch(oddsUrl).catch(() => ({ json: () => ({ odds: {} }) })) // 배당 API 실패 시 빈 객체로 방어
+                    fetch(oddsUrl).catch(() => ({ json: () => ({ odds: {} }) }))
                 ]);
 
                 const analysisJson = await analysisRes.json();
                 const oddsJson = await oddsRes.json();
 
-                allData = analysisJson.data; 
-                currentOdds = oddsJson.odds || {}; // 🌟 가져온 배당 데이터 저장
+                allData = analysisJson.data || []; 
+                currentOdds = oddsJson.odds || {}; 
 
                 applySortAndRender(); 
                 drawRadarChart(); 
                 renderBettingRecommendation();
             } catch (error) {
+                console.error('API 호출 오류:', error);
                 alert('서버 연결 실패: ' + error);
             }
         }
@@ -212,7 +233,7 @@
         function toggleSort() {
             const btn = document.getElementById('sortToggleBtn');
             if (sortMode === 'horse_no') {
-                sortMode = 'pred_score_lgbm'; // 🌟 lgbm 기준으로 변경
+                sortMode = 'pred_score_lgbm';
                 btn.innerHTML = '<i class="fa-solid fa-star"></i> 정렬: 예측 확률순';
                 btn.className = 'btn btn-primary fw-bold w-100';
             } else {
@@ -224,10 +245,15 @@
         }
 
         function applySortAndRender() {
-            if (sortMode === 'pred_score_lgbm') { // 🌟 lgbm 기준으로 변경
+            if (sortMode === 'pred_score_lgbm') {
                 allData.sort((a, b) => b.pred_score_lgbm - a.pred_score_lgbm);
             } else {
-                allData.sort((a, b) => parseInt(a.horse_no) - parseInt(b.horse_no));
+                allData.sort((a, b) => {
+                    if (a.meet_loc !== b.meet_loc) {
+                        return (a.meet_loc || '').localeCompare(b.meet_loc || '');
+                    }
+                    return parseInt(a.horse_no) - parseInt(b.horse_no);
+                });
             }
             filterTable(); 
         }
@@ -256,34 +282,51 @@
                     else actualRankHtml = `<span class="badge bg-light text-dark border">${rank}착</span>`;
                 }
 
-                // 🌟 가치 베팅(EV) 자동 계산 로직
+                // 가치 베팅(EV) 자동 계산
                 const horseNoStr = String(item.horse_no);
                 const odds = currentOdds[horseNoStr] || 0;
                 
                 let oddsHtml = '<span class="text-muted">-</span>';
                 let evHtml = '<span class="badge bg-light text-muted border">배당 없음</span>';
-                let rowClass = ''; // 수익 구간 행 배경색
+                let rowClass = '';
 
                 if (odds > 0) {
                     oddsHtml = `<span class="fw-bold text-primary">${odds}배</span>`;
-                    
-                    // LightGBM 확률 기반 기댓값(EV) 계산
                     const ev = (item.pred_score_lgbm / 100) * odds;
                     const evPercent = (ev * 100).toFixed(0);
 
-                    if (ev >= 1.2) { // 120% 이상: 초강력 가치 베팅
+                    if (ev >= 1.2) {
                         evHtml = `<span class="badge bg-danger fs-6">🔥 ${evPercent}%</span>`;
-                        rowClass = 'table-warning'; // 행 전체를 노란색으로 강조
-                    } else if (ev >= 1.0) { // 100% 이상: 수익 구간
+                        rowClass = 'table-warning';
+                    } else if (ev >= 1.0) {
                         evHtml = `<span class="badge bg-success fs-6">👍 ${evPercent}%</span>`;
-                    } else { // 100% 미만: 손실 구간 (확률은 높아도 배당이 너무 낮음)
+                    } else {
                         evHtml = `<span class="badge bg-secondary">${evPercent}%</span>`;
                     }
                 }
 
+                // 🌟 경마장별 뱃지 컬러 지정
+                const locName = item.meet_loc || '부산경남';
+                let locBadgeClass = 'bg-primary text-white';
+                if (locName.includes('부산') || locName.includes('부경')) {
+                    locBadgeClass = 'bg-info text-dark';
+                } else if (locName.includes('제주')) {
+                    locBadgeClass = 'bg-warning text-dark';
+                }
+
+                // 🌟 [개선] 경마장 구분 태그 + 원형 등번호 마번 UI (단일 경마장 선택 시에도 유지)
+                const horseNoDisplay = `
+                    <div class="d-inline-flex align-items-center justify-content-center gap-1">
+                        <span class="badge ${locBadgeClass} shadow-sm" style="font-size: 0.72rem; padding: 4px 6px;">${locName}</span>
+                        <span class="badge rounded-circle bg-dark text-white fw-bold d-inline-flex align-items-center justify-content-center shadow-sm" style="width: 26px; height: 26px; font-size: 0.85rem;">
+                            ${item.horse_no}
+                        </span>
+                    </div>
+                `;
+
                 tbody.innerHTML += `
                     <tr class="${rowClass}">
-                        <td><strong>${item.horse_no}</strong></td>
+                        <td class="align-middle">${horseNoDisplay}</td>
                         <td><strong>${item.horse_name}</strong> <span class="badge bg-secondary" style="font-size:0.7em;">${item.total_races}전</span></td>
                         <td>${item.jockey_name} <br><small class="text-muted">(${parseFloat(item.jk_top3_rate).toFixed(1)}%)</small></td>
                         <td>${item.wg_budam}</td>
@@ -309,7 +352,6 @@
                             </div>
                         </td>
                         
-                        <!-- 🌟 추가된 배당 및 EV 출력 -->
                         <td class="align-middle">${oddsHtml}</td>
                         <td class="align-middle">${evHtml}</td>
                     </tr>
@@ -345,14 +387,14 @@
         }
 
         function drawRadarChart() {
-            if (!allData || allData.length < 3) {
+            const selectedLoc = document.getElementById('meetLoc').value;
+            if (selectedLoc === '전체' || !allData || allData.length < 3) {
                 document.getElementById('chartContainer').style.display = 'none';
                 return;
             }
             
             document.getElementById('chartContainer').style.display = 'block';
             
-            // 🌟 LightGBM 확률 순으로 상위 3마리 추출
             const top3 = [...allData].sort((a, b) => b.pred_score_lgbm - a.pred_score_lgbm).slice(0, 3);
             const ctx = document.getElementById('radarChart').getContext('2d');
             
@@ -408,18 +450,19 @@
             const date = document.getElementById('meetDate').value;
 
             const coords = {
+                '전체': { lat: 37.429, lon: 127.016 },
                 '서울': { lat: 37.429, lon: 127.016 },
-                '부경': { lat: 35.153, lon: 128.877 },
+                '부산경남': { lat: 35.153, lon: 128.877 },
                 '제주': { lat: 33.415, lon: 126.402 },
                 '영천': { lat: 35.973, lon: 128.938 }
             };
-            const { lat, lon } = coords[loc];
+            const targetCoord = coords[loc] || coords['전체'];
             
             try {
-                const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=weather_code,precipitation_sum&timezone=Asia%2FSeoul&start_date=${date}&end_date=${date}`);
+                const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${targetCoord.lat}&longitude=${targetCoord.lon}&daily=weather_code,precipitation_sum&timezone=Asia%2FSeoul&start_date=${date}&end_date=${date}`);
                 const data = await res.json();
                 
-                if (data && data.daily) {
+                if (data && data.daily && data.daily.weather_code) {
                     const code = data.daily.weather_code[0];
                     const rainMM = data.daily.precipitation_sum[0] || 0; 
                     
@@ -446,12 +489,12 @@
 
         function renderBettingRecommendation() {
             const container = document.getElementById('bettingContainer');
-            if (!allData || allData.length < 3) {
+            const selectedLoc = document.getElementById('meetLoc').value;
+            if (selectedLoc === '전체' || !allData || allData.length < 3) {
                 container.style.display = 'none';
                 return;
             }
 
-            // 🌟 LightGBM 확률 순으로 1, 2, 3등 추출
             const top3 = [...allData].sort((a, b) => b.pred_score_lgbm - a.pred_score_lgbm).slice(0, 3);
             const h1 = top3[0];
             const h2 = top3[1];
@@ -463,7 +506,53 @@
 
             container.style.display = 'block';
         }
-        
+
+        // 로딩 표시 제어 함수
+        function showLoading(isLoading) {
+            const overlay = document.getElementById('loadingOverlay');
+            if (overlay) {
+                overlay.style.display = isLoading ? 'flex' : 'none';
+            }
+        }
+
+        async function fetchAnalysisData() {
+            showLoading(true); // 🌟 로딩 시작
+
+            const loc = document.getElementById('meetLoc').value;
+            const date = document.getElementById('meetDate').value;
+            const weather = document.getElementById('weather').value;
+            const trackCond = document.getElementById('trackCond').value;
+            
+            const analysisUrl = `http://127.0.0.1:8000/api/analysis?meet_date=${date}&meet_loc=${encodeURIComponent(loc)}&race_no=${currentRaceNo}&weather=${encodeURIComponent(weather)}&track_cond=${encodeURIComponent(trackCond)}`;
+            const oddsUrl = `http://127.0.0.1:8000/api/odds?meet_loc=${encodeURIComponent(loc)}&race_no=${currentRaceNo}`;
+
+            try {
+                const [analysisRes, oddsRes] = await Promise.all([
+                    fetch(analysisUrl),
+                    fetch(oddsUrl).catch(() => ({ json: () => ({ odds: {} }) }))
+                ]);
+
+                const analysisJson = await analysisRes.json();
+                const oddsJson = await oddsRes.json();
+
+                allData = analysisJson.data || []; 
+                currentOdds = oddsJson.odds || {}; 
+
+                applySortAndRender(); 
+                drawRadarChart(); 
+                renderBettingRecommendation();
+            } catch (error) {
+                console.error('API 호출 오류:', error);
+                alert('서버 연결 실패: ' + error);
+            } finally {
+                showLoading(false); // 🌟 요청 성공/실패 여부와 관계없이 로딩 종료
+            }
+        }
+
+        async function handleDateChange() {
+            document.getElementById('meetLoc').value = '전체';
+            await resetToOneR();
+        }
     </script>
 </body>
 </html>
